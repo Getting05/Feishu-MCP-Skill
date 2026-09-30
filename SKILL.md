@@ -1,332 +1,49 @@
 ---
-name: feishu-document-authoring
-description: Create, translate, edit, and restructure Feishu/Lark Docs and Wiki pages using native document blocks and rich-text elements. Use this skill whenever working with Feishu documents, especially technical papers, formulas, tables, figures, code, and long structured content.
+name: feishu-mcp
+description: 使用 Getting05 的 Feishu MCP 以应用身份读取、创建和编辑飞书知识库页面、云文档、多维表格及其他云空间资源。用户提供飞书链接或要求操作飞书文档、Wiki、表格、画板、评论或权限时使用；不适用于飞书消息、任务、通讯录及需要用户 OAuth 的操作。
 ---
 
-# Feishu Document Authoring
+# Feishu MCP
 
-## Purpose
+使用本 Skill 时，调用用户已连接的 [Feishu MCP](https://github.com/Getting05/FeishuMCP) 工具。服务地址是 `https://feishumcp.chengetting.workers.dev/mcp`。Skill 只指导工具选择，不负责安装另一套飞书 CLI，也不要求用户提供 App Secret。若工具不可用，先检查客户端是否已连接此 MCP；不要将其他飞书 MCP 的工具名或参数套用到这里。
 
-Use this skill whenever creating, translating, editing, restructuring, or formatting content inside Feishu/Lark Docs or Wiki documents.
+## 身份与边界
 
-The goal is not merely to insert text. The goal is to produce a document that looks and behaves like it was authored natively in Feishu.
+- 服务统一使用 `tenant_access_token`。它只能访问应用获授权的资源；用户在飞书中有权限，不代表应用有权限。`get_feishu_capabilities` 显示的是权限和接口证据，不保证某个资源实测可访问。
+- 新建知识空间、部分搜索与订阅接口仅支持用户令牌，此服务会拒绝已知的用户专属接口。不要尝试传 `useUAT`、切换 OAuth 或调用 `feishu-tool` 来绕过。
+- 当前服务重点支持云文档、Wiki、Base/Bitable、画板、Sheets、Slides、Drive、Mindnote；没有消息、群聊、任务或通讯录工具。先确认 `tools/list` 中有目标工具，再行动。
+- 只有用户授权的资源和操作才可写入。删除、转移权限等高影响操作先确定准确的资源 ID 和官方接口契约；不把模糊的名称匹配直接用于写入。
 
-## Core principle
+## 选择工具
 
-Prefer native Feishu document structures over plain-text approximations.
+| 任务 | 首选工具 |
+| --- | --- |
+| 读取 Wiki/Docx、查找某段文字 | `resolve_feishu_url`、`read_feishu_document`、`find_feishu_blocks` |
+| 在已有 Wiki 页面下创建 Docx，可附带内容 | `create_feishu_wiki_page` |
+| 列子页面；重命名、复制或移动节点 | `list_feishu_wiki_children`、`manage_feishu_wiki_page` |
+| 新建云文档、文件夹、电子表格、多维表格或幻灯片 | `create_feishu_file` |
+| 向 Wiki/Docx 添加标题、列表、表格、代码等 | `append_feishu_markdown` |
+| 仅修改一个现有文本块；只加简单段落 | `update_feishu_text_block`；`append_feishu_paragraph` |
+| 评论、权限、媒体、复杂块、表格记录及其他开放接口 | `search_feishu_api` → `call_feishu_api`，必要时使用对应 `feishu_*_api` |
+| 读取已接收的事件 | `list_feishu_events`；先确认事件回调已配置 |
 
-Do not represent structured content as ordinary paragraphs when Feishu provides a native representation.
+具体参数和其余工具分组见 [工具与示例](references/tools.md)。涉及公式、图片或学术论文时，读取 [原生文档写作](references/rich-documents.md)；遇到权限或接口错误时，读取 [权限与排错](references/access-and-errors.md)。
 
-Prefer:
+## 文档与知识库工作流
 
-- headings → native heading blocks
-- equations → native equation elements or equation blocks
-- ordered/unordered lists → native list blocks
-- tables → native table blocks
-- code → native code blocks
-- quotes → native quote blocks
-- images → native image blocks
-- links → rich-text links
+1. **定位资源。** `/wiki/<node_token>` 是知识库节点；`/docx/<document_id>` 是底层文档。可直接把这两类链接传给高层工具。调用 Docx 原始接口前，用 `resolve_feishu_url` 取得 `document_id`。不要假设 token 都有固定前缀。
+2. **读取已有内容。** 编辑现有文档时先读 `read_feishu_document`；需要精确修改时用 `find_feishu_blocks` 定位 `block_id`。该读取工具主要返回文本和块 ID；复杂样式、嵌套结构或公式需用 Docx API 查看完整块。
+3. **选择保留结构的写法。** 新增标题、列表、表格、代码优先用 Markdown 工作流；简单纯文本段落才用 `append_feishu_paragraph`。修改现有段落可用 `update_feishu_text_block`，但它会替换整块内联文本，可能丢失粗体、链接等样式；需要保留样式时用 Docx 块接口做定点更新。
+4. **核对结果。** 较大范围的写入后读回目标文档，确认内容、顺序和块类型。`append_feishu_markdown` 保留旧内容；结构重写前检查旧块，避免重复。
 
-Use plain-text paragraph helpers only for genuinely simple prose or when no structured API is available.
+创建知识库子页面时优先给 `create_feishu_wiki_page` 一个**父页面** URL、标题和可选 `markdown`。已有 `space_id` 但没有父页面时可用 `create_feishu_wiki_document`。若飞书返回父节点编辑权限不足，停止对该父节点重复尝试，并说明应用需要该节点的编辑权限。
 
-## Required workflow
+Markdown 转换单次最多 1000 个块；长内容按章节分段写入。该工作流会拒绝图片，不会自动上传外部图片；图片需按官方媒体上传和 `replace_image` 流程操作。若新页面已创建而内容写入失败，返回值会包含 `node` 与 `client_token`：先读回该页面，后续同一写入重试复用该 token，勿重复创建页面。
 
-When a user provides a Feishu Wiki or Doc URL and asks to create or modify content:
+## 扩展 API 工作流
 
-1. Resolve the Wiki URL to the underlying document/token when necessary.
-2. Read the existing document before making non-trivial edits.
-3. Inspect the current block hierarchy and identify the exact insertion or replacement location.
-4. Parse the source content into semantic units before writing:
-   - title
-   - headings and subheadings
-   - paragraphs
-   - equations
-   - lists
-   - tables
-   - figures/images
-   - captions
-   - code
-   - references
-5. Map each semantic unit to the best native Feishu representation.
-6. Write the document using the simplest API that preserves those semantics.
-7. Read the document again after substantial edits and verify the result.
+先用 `search_feishu_api` 搜关键词、scope 或接口 ID，再用 `endpoint_id` 取得参数及官方文档链接。核对 `accessTokens`、请求方法、路径参数、查询参数、请求体与目标资源权限。`null` 表示元数据未知，不表示无限制。目录包含未做过真实租户验证的路由。
 
-For long documents, work section by section and verify incrementally.
+优先用 `call_feishu_api` 传 `endpoint_id`、`parameters` 及可选 `body`/`upload`。目录未覆盖或需要官方文档中的新字段时，用领域工具 `feishu_docx_api`、`feishu_wiki_api`、`feishu_bitable_api` 等，传**从 `/open-apis` 之后开始**的精确 `path`。GET 不带 body；JSON body 和 multipart upload 二选一。分页、异步任务、导出或分片上传要根据返回的游标与任务 ID 继续，不把第一步响应当最终结果。工具返回 `isError` 或飞书非零 `code` 时，先解释真实错误，再决定是否重试。
 
-## Do not use a plain-text-first workflow
-
-If a document is known in advance to contain equations, headings, tables, figures, code, or other structured content, do **not** first dump the whole document as plain-text paragraphs and repair the formatting later.
-
-Construct the correct native block structure from the beginning.
-
-Bad workflow:
-
-1. Append every paragraph as plain text.
-2. Finish the whole document.
-3. Discover formulas, headings, and tables render poorly.
-4. Repair them one by one.
-
-Preferred workflow:
-
-1. Parse source structure.
-2. Classify blocks.
-3. Create native headings/equations/tables/images as content is written.
-4. Verify rendering after each major section.
-
-## Equation rendering
-
-Mathematical expressions must be preserved semantically and rendered using Feishu's native equation representation whenever available.
-
-Never use Unicode/plain-text approximations for mathematical expressions if equation elements are supported.
-
-Bad:
-
-```text
-ĉ_smooth(q,t)=q_t−q_{t−1}
-```
-
-Preferred equation content:
-
-```latex
-\hat{c}_{\mathrm{smooth}}(q,t)=q_t-q_{t-1}
-```
-
-### Inline equations
-
-Use inline equation elements for short symbols and expressions embedded inside prose.
-
-Examples:
-
-```latex
-q_t
-```
-
-```latex
-T_{\mathrm{world}\leftarrow\mathrm{base}}T_{\mathrm{base}\leftarrow i}
-```
-
-### Display equations
-
-For important equations, long expressions, aligned equations, optimization objectives, matrices, sums, integrals, or piecewise functions, prefer a standalone/display equation block when the API supports it.
-
-Example:
-
-```latex
-d_c=\begin{cases}
--d+\frac{1}{2}\eta, & d<0,\\
-\frac{1}{2\eta}(-d+\eta)^2, & 0<d<\eta,\\
-0, & \text{otherwise}.
-\end{cases}
-```
-
-### Preserve notation exactly
-
-Preserve:
-
-- subscripts and superscripts
-- hats, bars, tildes, dots, and primes
-- Greek symbols
-- sums, products, integrals, norms, and determinants
-- matrices and vectors
-- fractions
-- cases/aligned environments
-- SO(3), SE(3), and Lie-group notation
-- transforms such as `T_{base \leftarrow i}`
-- derivatives such as `\dot q`, `\ddot q`
-
-Do not silently simplify mathematical notation into prose unless the user explicitly asks for a simplified explanation.
-
-### Equation API strategy
-
-If a high-level Feishu helper only accepts plain text, do not force equations through it.
-
-Use the Feishu Docx/OpenAPI rich-text or block endpoint that supports an `equation` element. If the exact schema is unknown, inspect/search the Feishu API schema first.
-
-After writing equations, re-read the affected blocks and verify that equations are actual equation elements rather than `text_run` content.
-
-## Headings and hierarchy
-
-Preserve semantic hierarchy using native heading blocks.
-
-For academic papers, a typical hierarchy is:
-
-```text
-Title
-Heading 1: 摘要
-Heading 1: 1 引言
-Heading 1: 2 相关工作
-Heading 2: 2.1 逆运动学
-Heading 2: 2.2 轨迹优化
-Heading 1: 3 方法
-Heading 2: 3.1 Solver
-...
-```
-
-Do not represent section headings such as `III. PYROKI: MODULAR KINEMATIC OPTIMIZATION` as ordinary body text when a heading block is available.
-
-Preserve the source section hierarchy unless the user explicitly requests restructuring.
-
-## Tables
-
-When the source contains a structured table, prefer a native Feishu table.
-
-Do not flatten a table into a single paragraph such as:
-
-```text
-Method CPU GPU TPU Arm Hand Humanoid IK ...
-```
-
-Preserve:
-
-- row and column semantics
-- headers
-- units
-- percentages
-- `mean ± std`
-- check/cross indicators
-- table numbers
-- captions
-- notes/footnotes
-
-If native table creation is not available through the currently loaded convenience tool, use the lower-level Docx API if supported.
-
-If the source itself contains an inconsistency between prose and a table, preserve both source values and annotate the inconsistency. Do not silently fix the paper.
-
-## Figures and images
-
-For figures in papers or technical documents:
-
-1. Preserve the figure number.
-2. Preserve or translate the caption as requested.
-3. Keep the caption adjacent to the figure.
-4. If the figure can be extracted or uploaded, insert it as a native image block rather than replacing it with a textual description.
-5. Do not omit diagrams that carry methodological information.
-6. If an image cannot be inserted, explicitly preserve the caption and state that the image itself was not inserted.
-
-For documents derived from PDFs, inspect rendered pages when figures, diagrams, or tables contain information not represented correctly in extracted text.
-
-## Lists, code, quotes, and links
-
-Use native structures whenever possible:
-
-- procedural steps → ordered list
-- unordered items → bullet list
-- shell/Python/YAML/JSON → code block
-- quotations → quote block
-- external references → rich-text link
-
-Avoid using manually typed prefixes such as `1)`, `-`, or backticks as a substitute for native blocks when proper blocks are available.
-
-## Technical paper translation
-
-When translating an academic paper into Feishu:
-
-- preserve the original organization
-- preserve technical terminology
-- preserve equations and notation
-- translate figure and table captions
-- preserve table values exactly
-- preserve section numbering when useful
-- normally keep bibliography entries in their original bibliographic language/form
-- do not turn a full translation into a summary
-- do not silently omit difficult paragraphs, figures, equations, or tables
-
-For specialized terms, retain the English term on first occurrence when this helps precision, for example:
-
-- 逆运动学（Inverse Kinematics, IK）
-- 动作重定向（Motion Retargeting）
-- Levenberg–Marquardt（LM）
-- Jacobian
-- Finite Scalar Quantization（FSQ）
-
-When a source is supplied by the user, the translation must be grounded in that source. Do not silently replace source content with general knowledge.
-
-## Block editing strategy
-
-Before editing an existing document:
-
-1. Read the document and obtain block IDs.
-2. Locate the exact block(s) to edit.
-3. Prefer targeted block updates over rewriting the entire document.
-4. Preserve existing rich formatting when possible.
-5. Be aware that replacing an entire text block may remove inline formatting/runs.
-6. Use raw Docx APIs when high-level helper tools cannot preserve the required structure.
-
-When making a structural rewrite, ensure old content is not accidentally duplicated.
-
-## API preference
-
-Use the simplest API that preserves the required semantics.
-
-Preferred order:
-
-1. High-level Feishu tool if it natively supports the desired structure.
-2. Feishu Docx/OpenAPI for rich blocks, equation elements, tables, images, or formatting.
-3. Plain-text paragraph helpers only as a fallback.
-
-Do not choose an easier API if doing so materially degrades document quality.
-
-If unsure how to construct a block or element:
-
-1. search the Feishu API catalog/schema
-2. inspect a known block of the desired type if available
-3. make a small test update when safe
-4. read the block back and verify its type and payload
-
-## Verification checklist
-
-After substantial document creation or editing, verify:
-
-- headings are real headings
-- equations are native equation elements/blocks
-- tables are real tables when supported
-- lists are real lists
-- code is in code blocks
-- figures are present when available
-- captions are adjacent to figures/tables
-- section order matches the intended structure
-- no major source content was omitted
-- no accidental duplicate content was introduced
-- formulas retained symbols, subscripts, superscripts, and operators
-- links resolve to the intended target
-
-For equations specifically, read the edited block and confirm the API returns an `equation` element rather than only plain `text_run` content.
-
-## Quality standard
-
-A finished Feishu document should look like a document authored directly in Feishu, not raw text pasted through an API.
-
-Before declaring the task complete, ask:
-
-- Are headings actually headings?
-- Are equations actually equations?
-- Are tables actually tables?
-- Are lists actually lists?
-- Is code actually code?
-- Are figures and captions handled correctly?
-- Is the hierarchy readable?
-- Did I verify the written result?
-
-If the API supports a better representation and the answer to any relevant question is no, fix it before finishing.
-
-## Tool-description guidance for Feishu MCP maintainers
-
-If maintaining the Feishu MCP/plugin itself, add complementary constraints to tool descriptions.
-
-For a plain paragraph helper:
-
-```text
-Use only for simple plain-text paragraphs. Do not use this function for equations, headings, tables, code blocks, images, or other structured document content when native Docx blocks/elements are available.
-```
-
-For the low-level Docx API tool:
-
-```text
-Prefer this API when creating or editing rich Feishu documents containing equations, tables, headings, lists, images, code blocks, or other structured block types that cannot be represented correctly through plain-text helpers.
-```
-
-The division of responsibility should be:
-
-- tool descriptions: define what an individual tool is appropriate for
-- this skill: define how to complete the end-to-end Feishu document task with good structure and rendering
+请求新功能、权限或事件时，不根据 scope 名称臆造接口。先用目录及官方文档确认该 API 支持应用身份；`base:*` 出现在 user 授权列表中不等于 tenant 已有授权。
